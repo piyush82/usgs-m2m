@@ -12,10 +12,13 @@ import datetime
 import os
 import pandas as pd
 import geopandas as gpd
+from dask import delayed, compute
+from dask.config import set as dask_set
 
 import warnings
 warnings.filterwarnings("ignore")
 
+dask_set(num_workers=10)
 
 # Send http request
 def sendRequest(url, data, apiKey=None, exitIfNoResponse=True):
@@ -89,19 +92,44 @@ def downloadFile(url):
         response = requests.get(url, stream=True)
         disposition = response.headers['content-disposition']
         filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
-        print(f"    Downloading: {filename}...")
+        print(f"    Downloading: {filename}...", )
 
         open(os.path.join(data_dir, filename), 'wb').write(response.content)
+        print(f"    Done downloading: {filename}")
         sema.release()
     except Exception as e:
         print(f"\nFailed to download from {url}. Will try to re-download.")
         sema.release()
-        runDownload(threads, url)
+        #runDownload(threads, url)
+        # need to send the failed download back to DASC framework
+
+def downloadFileDesc(url):
+    try:
+        response = requests.get(url, stream=True)
+        disposition = response.headers['content-disposition']
+        filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
+        print(f"    Downloading: {filename}...", )
+
+        open(os.path.join(data_dir, filename), 'wb').write(response.content)
+        print(f"    Done downloading: {filename}")
+    except Exception as e:
+        print(f"\nFailed to download from {url}. Will try to re-download.")
+        # need to send the failed download back to DASC framework
+        urls = []
+        urls.append(url)
+        runDownloadDask(urls)
 
 def runDownload(threads, url):
     thread = threading.Thread(target=downloadFile, args=(url,))
     threads.append(thread)
     thread.start()
+
+
+def runDownloadDask(urls):
+    downloads = []
+    for  url in urls:
+        downloads.append(delayed(downloadFileDesc)(url))
+    compute(*downloads)
 
 
 data_dir = '/Volumes/External 2T/usgsm2m/data'
@@ -124,9 +152,21 @@ sema = threading.Semaphore(value=maxthreads)
 label = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") # Customized label using date time
 threads = []
 
+# -----------------------------------------------------
+#
+# lets read the credentials from the creds file
+#
+# -----------------------------------------------------
 
-username = "your-username"
-token = "your-token"
+f = open("m2m-token.txt","r")
+linelist = f.readlines()
+username = ""
+token = ""
+if len(linelist) >= 2:
+    token = linelist[0].strip()
+    username = linelist[1].strip()
+f.close()
+
 # def prompt_ERS_login(serviceURL):
 #     print("Logging in...\n")
 #
@@ -160,24 +200,24 @@ if apiKey:
 fileType = 'bundle'
 bandNames = {'SR_B2', 'QA_PIXEL', 'ST_B10'} # will not be used
 
-from geojson import Polygon, Feature, FeatureCollection, dump
-
-polygon = Polygon([[[-148.9555, 61.4834],\
-                  [-150.9495, 61.4834],\
-                  [-150.9495, 61.0031],\
-                  [-148.9555, 61.0031],\
-                  [-148.9555, 61.4834]]])
-
-features = []
-features.append(Feature(geometry=polygon, properties={"city":"Anchorage", "state": "Alaska"}))
-
-# add more features...
-# features.append(...)
-
-feature_collection = FeatureCollection(features)
-
-with open('./utils/Anchorage_Alaska_aoi.geojson', 'w') as f:
-    dump(feature_collection, f)
+# from geojson import Polygon, Feature, FeatureCollection, dump
+#
+# polygon = Polygon([[[-148.9555, 61.4834],\
+#                   [-150.9495, 61.4834],\
+#                   [-150.9495, 61.0031],\
+#                   [-148.9555, 61.0031],\
+#                   [-148.9555, 61.4834]]])
+#
+# features = []
+# features.append(Feature(geometry=polygon, properties={"city":"Anchorage", "state": "Alaska"}))
+#
+# # add more features...
+# # features.append(...)
+#
+# feature_collection = FeatureCollection(features)
+#
+# with open('./utils/Anchorage_Alaska_aoi.geojson', 'w') as f:
+#     dump(feature_collection, f)
 
 # aoi_geodf =  gpd.read_file('./utils/Anchorage_Alaska_aoi.geojson') #aoi geopandas dataframe
 aoi_geodf =  gpd.read_file('./utils/czech_republic_aoi.geojson') #aoi geopandas dataframe
@@ -207,11 +247,21 @@ datasetName = 'landsat_ot_c2_l2'
 #                                                [-148.9555, 61.0031],\
 #                                                [-148.9555, 61.4834]]]}}
 
+# ------------------------------------------------------------
+#
+# Spatial filter is a bounding box over Czech Rebublic
+#
+# -------------------------------------------------------------
+
 spatialFilter = {'filterType' : 'geojson',
                  'geoJson' : {'type': 'Polygon',\
                               'coordinates': [[[12.10623635584355,51.02018426967837],[12.10623635584355,48.53477785265926],[18.842665628085456,48.53477785265926],[18.842665628085456,51.02018426967837],[12.10623635584355,51.02018426967837]]]}}
-
-temporalFilter = {'start' : '2024-08-01', 'end' : '2024-08-16'}
+#---------------------------------------------------------------
+#
+# Define the temporal filter next
+#
+#----------------------------------------------------------------
+temporalFilter = {'start' : '2013-07-01', 'end' : '2013-08-01'}
 
 cloudCoverFilter = {'min' : 0, 'max' : 100} #do not filter based on cloud cover
 
@@ -227,7 +277,7 @@ search_payload = {
 # lets start tracking time needed
 starttime = time.perf_counter()
 
-print(search_payload)
+# print(search_payload)
 
 scenes = sendRequest(serviceUrl + "scene-search", search_payload, apiKey)
 
@@ -317,11 +367,13 @@ if len(download_request_results['newRecords']) == 0 and len(download_request_res
     print('No records returned, please update your scenes or scene-search filter')
     sys.exit()
 
+urls = []
 # next start the scene downloads
 # Attempt the download URLs
 for result in download_request_results['availableDownloads']:
-    print(f"Get download url: {result['url']}\n")
-    runDownload(threads, result['url'])
+    # print(f"Get download url: {result['url']}\n")
+    urls.append(result['url'])
+    # runDownload(threads, result['url'])
 
 preparingDownloadCount = len(download_request_results['preparingDownloads'])
 preparingDownloadIds = []
@@ -338,14 +390,16 @@ if preparingDownloadCount > 0:
         for result in download_retrieve_results['available']:
             if result['downloadId'] in preparingDownloadIds:
                 preparingDownloadIds.remove(result['downloadId'])
-                runDownload(threads, result['url'])
-                print(f"       {result['url']}\n")
+                urls.append(result['url'])
+                # runDownload(threads, result['url'])
+                # print(f"       {result['url']}\n")
 
         for result in download_retrieve_results['requested']:
             if result['downloadId'] in preparingDownloadIds:
                 preparingDownloadIds.remove(result['downloadId'])
-                runDownload(threads, result['url'])
-                print(f"       {result['url']}\n")
+                urls.append(result['url'])
+                # runDownload(threads, result['url'])
+                # print(f"       {result['url']}\n")
 
     # Didn't get all download URLs, retrieve again after 30 seconds
     while len(preparingDownloadIds) > 0:
@@ -356,12 +410,22 @@ if preparingDownloadCount > 0:
             for result in download_retrieve_results['available']:
                 if result['downloadId'] in preparingDownloadIds:
                     preparingDownloadIds.remove(result['downloadId'])
-                    print(f"    Get download url: {result['url']}\n")
-                    runDownload(threads, result['url'])
+                    # print(f"    Get download url: {result['url']}\n")
+                    urls.append(result['url'])
+                    # runDownload(threads, result['url'])
 
-print("\nDownloading files... Please do not close the program\n")
-for thread in threads:
-    thread.join()
+print("Here are all the files I need to download now:\n")
+count = 0
+for url in urls:
+    count += 1
+    print(count, ":", url)
+
+# print("\nDownloading files... Please do not close the program\n")
+# for thread in threads:
+#     thread.join()
+
+# Now sending the files to be downloaded with DASC framework
+runDownloadDask(urls)
 
 duration = timedelta(seconds=time.perf_counter()-starttime)
 print("")
