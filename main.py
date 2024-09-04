@@ -103,17 +103,21 @@ def downloadFile(url):
         #runDownload(threads, url)
         # need to send the failed download back to DASC framework
 
-def downloadFileDesc(url):
+def downloadFileDesc(url, start, end):
     try:
         response = requests.get(url, stream=True)
         disposition = response.headers['content-disposition']
         filename = re.findall("filename=(.+)", disposition)[0].strip("\"")
         print(f"    Downloading: {filename}...", )
+        if not os.path.exists(os.path.join(data_dir, start+'-to-'+end)):
+            # Create the directory
+            os.makedirs(os.path.join(data_dir, start+'-to-'+end))
 
-        open(os.path.join(data_dir, filename), 'wb').write(response.content)
+        open(os.path.join(data_dir, start+'-to-'+end, filename), 'wb').write(response.content)
         print(f"    Done downloading: {filename}")
     except Exception as e:
         print(f"\nFailed to download from {url}. Will try to re-download.")
+        print(e)
         # need to send the failed download back to DASC framework
         urls = []
         urls.append(url)
@@ -128,7 +132,7 @@ def runDownload(threads, url):
 def runDownloadDask(urls):
     downloads = []
     for  url in urls:
-        downloads.append(delayed(downloadFileDesc)(url))
+        downloads.append(delayed(downloadFileDesc)(url, temporalFilter['start'], temporalFilter['end']))
     compute(*downloads)
 
 
@@ -238,7 +242,7 @@ for _, r in aoi_geodf.iterrows():
 m
 
 datasetName = 'landsat_ot_c2_l2'
-
+# datasetName = 'landsat_ot_c2_l1' # was used in the older DAGs
 # spatialFilter = {'filterType' : 'geojson',
 #                  'geoJson' : {'type': 'Polygon',\
 #                               'coordinates': [[[-148.9555, 61.4834],\
@@ -261,7 +265,9 @@ spatialFilter = {'filterType' : 'geojson',
 # Define the temporal filter next
 #
 #----------------------------------------------------------------
-temporalFilter = {'start' : '2013-07-01', 'end' : '2013-08-01'}
+temporalFilter = {'start' : '2014-03-01', 'end' : '2014-04-01'}
+
+print(temporalFilter['start'], temporalFilter['end'])
 
 cloudCoverFilter = {'min' : 0, 'max' : 100} #do not filter based on cloud cover
 
