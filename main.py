@@ -14,7 +14,6 @@ import pandas as pd
 import geopandas as gpd
 from dask import delayed, compute
 from dask.config import set as dask_set
-
 #from aqis import AQIS, DEFAULT_CONNECTIONS, Connection, ExecutionMode
 
 import warnings
