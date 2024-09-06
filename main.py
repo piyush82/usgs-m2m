@@ -15,10 +15,14 @@ import geopandas as gpd
 from dask import delayed, compute
 from dask.config import set as dask_set
 
+#from aqis import AQIS, DEFAULT_CONNECTIONS, Connection, ExecutionMode
+
 import warnings
 warnings.filterwarnings("ignore")
 
 dask_set(num_workers=10)
+
+# aqis_local_instance = AQIS()
 
 # Send http request
 def sendRequest(url, data, apiKey=None, exitIfNoResponse=True):
@@ -100,8 +104,7 @@ def downloadFile(url):
     except Exception as e:
         print(f"\nFailed to download from {url}. Will try to re-download.")
         sema.release()
-        #runDownload(threads, url)
-        # need to send the failed download back to DASC framework
+        runDownload(threads, url)
 
 def downloadFileDesc(url, start, end):
     try:
@@ -134,6 +137,7 @@ def runDownloadDask(urls):
     for  url in urls:
         downloads.append(delayed(downloadFileDesc)(url, temporalFilter['start'], temporalFilter['end']))
     compute(*downloads)
+ #   aqis_local_instance.execute_simple(*downloads, print_result=True)
 
 
 data_dir = '/Volumes/External 2T/usgsm2m/data'
